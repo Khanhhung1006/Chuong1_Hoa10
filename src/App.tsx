@@ -38,6 +38,7 @@ export default function App() {
   // Flashcard State
   const [fcIndex, setFcIndex] = useState(0);
   const [fcFlipped, setFcFlipped] = useState(false);
+  const [memorizedCards, setMemorizedCards] = useState<number[]>([]);
 
   // Load stats & settings on mount
   useEffect(() => {
@@ -45,6 +46,13 @@ export default function App() {
     if (saved) {
       try {
         setStats(JSON.parse(saved));
+      } catch (e) {}
+    }
+
+    const memorizedPref = localStorage.getItem('chemistry_memorized');
+    if (memorizedPref) {
+      try {
+        setMemorizedCards(JSON.parse(memorizedPref));
       } catch (e) {}
     }
 
@@ -92,6 +100,8 @@ export default function App() {
   };
 
   // --- Flashcards Logic ---
+  const activeQuestions = questions.filter(q => !memorizedCards.includes(q.id));
+
   const startFlashcards = () => {
     handleInteraction();
     audio.playClick();
@@ -116,10 +126,38 @@ export default function App() {
     audio.playClick();
     if (fcFlipped) {
       setFcFlipped(false);
-      setTimeout(() => setFcIndex(i => Math.min(questions.length - 1, i + 1)), 250);
+      setTimeout(() => setFcIndex(i => Math.min(activeQuestions.length - 1, i + 1)), 250);
     } else {
-      setFcIndex(i => Math.min(questions.length - 1, i + 1));
+      setFcIndex(i => Math.min(activeQuestions.length - 1, i + 1));
     }
+  };
+
+  const handleMarkMemorized = () => {
+    handleInteraction();
+    audio.playSuccess();
+    const currentId = activeQuestions[fcIndex]?.id;
+    if (!currentId) return;
+
+    const commit = () => {
+      const updated = [...memorizedCards, currentId];
+      setMemorizedCards(updated);
+      localStorage.setItem('chemistry_memorized', JSON.stringify(updated));
+      setFcIndex(prev => Math.max(0, prev >= activeQuestions.length - 1 ? prev - 1 : prev));
+    };
+
+    if (fcFlipped) {
+      setFcFlipped(false);
+      setTimeout(commit, 250);
+    } else {
+      commit();
+    }
+  };
+
+  const resetMemorized = () => {
+    handleInteraction();
+    audio.playClick();
+    setMemorizedCards([]);
+    localStorage.setItem('chemistry_memorized', JSON.stringify([]));
   };
 
   // --- Quiz Logic ---
@@ -261,7 +299,7 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <h3 className="font-bold text-stone-700 flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5 text-cyan-500"/>
-                    Trắc Nghiệm ({quizLength === 15 ? 'Tất cả' : quizLength} câu)
+                    Trắc Nghiệm ({quizLength === questions.length ? 'Tất cả' : quizLength} câu)
                   </h3>
                 </div>
                 <button 
@@ -284,73 +322,105 @@ export default function App() {
             exit={{ opacity: 0, x: -50 }}
             className="flex-1 flex flex-col"
           >
-            {/* Header */}
-            <div className="px-6 pt-6 pb-4 flex items-center justify-between bg-stone-50 sticky top-0 z-10">
-              <button 
-                onClick={returnHome}
-                className="no-select w-10 h-10 flex items-center justify-center rounded-full bg-white shadow-sm border border-stone-200 text-stone-600 active:bg-stone-100 transition-colors"
-              >
-                <ChevronLeft className="w-6 h-6" />
-              </button>
-              <div className="font-bold text-stone-400">
-                Thẻ {fcIndex + 1} / {questions.length}
+            {activeQuestions.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+                <div className="w-24 h-24 bg-emerald-100 rounded-full flex items-center justify-center mb-6">
+                    <CheckCircle2 className="w-12 h-12 text-emerald-500" />
+                </div>
+                <h2 className="text-2xl font-bold text-stone-800 mb-2">Tuyệt vời!</h2>
+                <p className="text-stone-500 mb-8">Bạn đã thuộc tất cả {questions.length} thẻ học tập.</p>
+                <button 
+                  onClick={resetMemorized} 
+                  className="no-select w-full bg-cyan-600 text-white font-bold text-lg py-4 rounded-2xl shadow-lg shadow-cyan-600/20 active:scale-95 transition-transform"
+                >
+                  Học lại từ đầu
+                </button>
+                <button 
+                  onClick={returnHome} 
+                  className="no-select w-full mt-4 bg-white border-2 border-stone-200 text-stone-700 font-bold text-lg py-4 rounded-2xl active:bg-stone-50 transition-colors"
+                >
+                  Về trang chủ
+                </button>
               </div>
-              <div className="w-10"></div>
-            </div>
-
-            {/* Card Container */}
-            <div className="flex-1 px-6 py-8 flex flex-col perspective">
-              <motion.div
-                className="w-full flex-1 relative preserve-3d cursor-pointer"
-                animate={{ rotateY: fcFlipped ? 180 : 0 }}
-                transition={{ duration: 0.5, type: 'spring', stiffness: 260, damping: 20 }}
-                onClick={() => {
-                  handleInteraction();
-                  audio.playClick();
-                  setFcFlipped(!fcFlipped);
-                }}
-              >
-                {/* Front */}
-                <div className="absolute inset-0 backface-hidden bg-white rounded-3xl p-8 shadow-xl border border-stone-200 flex flex-col items-center justify-center text-center gap-6">
-                  <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mb-2">
-                     <span className="text-2xl font-black text-amber-500">Q</span>
+            ) : (
+              <>
+                {/* Header */}
+                <div className="px-6 pt-6 pb-4 flex items-center justify-between bg-stone-50 sticky top-0 z-10">
+                  <button 
+                    onClick={returnHome}
+                    className="no-select w-10 h-10 flex items-center justify-center rounded-full bg-white shadow-sm border border-stone-200 text-stone-600 active:bg-stone-100 transition-colors"
+                  >
+                    <ChevronLeft className="w-6 h-6" />
+                  </button>
+                  <div className="font-bold text-stone-400">
+                    Thẻ {fcIndex + 1} / {activeQuestions.length}
                   </div>
-                  <h2 className="text-2xl font-bold text-stone-800 leading-snug">
-                    {questions[fcIndex].question}
-                  </h2>
-                  <p className="text-stone-400 text-sm mt-auto font-medium">Chạm để xem đáp án</p>
+                  <div className="w-10"></div>
                 </div>
-                
-                {/* Back */}
-                <div className="absolute inset-0 backface-hidden rotate-y-180 bg-cyan-600 rounded-3xl p-8 shadow-xl flex flex-col items-center justify-center text-center gap-6 text-white">
-                  <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mb-2">
-                     <span className="text-2xl font-black text-white">A</span>
-                  </div>
-                  <h2 className="text-2xl font-bold leading-snug">
-                    {questions[fcIndex].answer}
-                  </h2>
-                  <p className="text-cyan-100 text-sm mt-auto font-medium">Chạm để lật lại</p>
-                </div>
-              </motion.div>
-            </div>
 
-            {/* Controls */}
-            <div className="p-6 pb-safe flex items-center justify-between gap-4">
-              <button
-                onClick={handlePrevCard}
-                disabled={fcIndex === 0}
-                className="no-select flex-1 bg-white border-2 border-stone-200 text-stone-700 font-bold text-lg py-4 rounded-2xl active:bg-stone-50 transition-colors disabled:opacity-50 disabled:active:bg-white flex justify-center items-center"
-              >
-                <ChevronLeft className="w-6 h-6 mr-1" /> Trước
-              </button>
-              <button
-                onClick={handleNextCard}
-                disabled={fcIndex === questions.length - 1}
-                className="no-select flex-1 bg-amber-100 text-amber-800 font-bold text-lg py-4 rounded-2xl active:bg-amber-200 transition-colors disabled:opacity-50 flex justify-center items-center"
-              >
-                Tiếp <ChevronRight className="w-6 h-6 ml-1" />
-              </button>
-            </div>
+                {/* Card Container */}
+                <div className="flex-1 px-6 py-8 flex flex-col perspective">
+                  <motion.div
+                    className="w-full flex-1 relative preserve-3d cursor-pointer"
+                    animate={{ rotateY: fcFlipped ? 180 : 0 }}
+                    transition={{ duration: 0.5, type: 'spring', stiffness: 260, damping: 20 }}
+                    onClick={() => {
+                      handleInteraction();
+                      audio.playClick();
+                      setFcFlipped(!fcFlipped);
+                    }}
+                  >
+                    {/* Front */}
+                    <div className="absolute inset-0 backface-hidden bg-white rounded-3xl p-8 shadow-xl border border-stone-200 flex flex-col items-center justify-center text-center gap-6">
+                      <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mb-2">
+                         <span className="text-2xl font-black text-amber-500">Q</span>
+                      </div>
+                      <h2 className="text-2xl font-bold text-stone-800 leading-snug">
+                        {activeQuestions[fcIndex]?.question}
+                      </h2>
+                      <p className="text-stone-400 text-sm mt-auto font-medium">Chạm để xem đáp án</p>
+                    </div>
+                    
+                    {/* Back */}
+                    <div className="absolute inset-0 backface-hidden rotate-y-180 bg-cyan-600 rounded-3xl p-8 shadow-xl flex flex-col items-center justify-center text-center gap-6 text-white">
+                      <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mb-2">
+                         <span className="text-2xl font-black text-white">A</span>
+                      </div>
+                      <h2 className="text-2xl font-bold leading-snug">
+                        {activeQuestions[fcIndex]?.answer}
+                      </h2>
+                      <p className="text-cyan-100 text-sm mt-auto font-medium">Chạm để lật lại</p>
+                    </div>
+                  </motion.div>
+                </div>
+
+                {/* Controls */}
+                <div className="p-6 pb-safe flex flex-col gap-4">
+                  <button
+                    onClick={handleMarkMemorized}
+                    className="no-select w-full bg-emerald-100 text-emerald-700 hover:bg-emerald-200 active:bg-emerald-300 font-bold text-lg py-4 rounded-2xl transition-colors flex items-center justify-center gap-2"
+                  >
+                    <CheckCircle2 className="w-6 h-6" /> Đã nhớ (Không hiện lại)
+                  </button>
+                  <div className="flex items-center justify-between gap-4">
+                    <button
+                      onClick={handlePrevCard}
+                      disabled={fcIndex === 0}
+                      className="no-select flex-1 bg-white border-2 border-stone-200 text-stone-700 font-bold text-lg py-4 rounded-2xl active:bg-stone-50 transition-colors disabled:opacity-50 disabled:active:bg-white flex justify-center items-center"
+                    >
+                      <ChevronLeft className="w-6 h-6 mr-1" /> Trước
+                    </button>
+                    <button
+                      onClick={handleNextCard}
+                      disabled={fcIndex === activeQuestions.length - 1}
+                      className="no-select flex-1 bg-amber-100 text-amber-800 font-bold text-lg py-4 rounded-2xl active:bg-amber-200 transition-colors disabled:opacity-50 flex justify-center items-center"
+                    >
+                      Tiếp <ChevronRight className="w-6 h-6 ml-1" />
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </motion.div>
         )}
 
@@ -495,6 +565,28 @@ export default function App() {
               
               <div className="h-px w-full bg-stone-100"></div>
 
+              {/* Memorized Cards */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
+                    <Layers className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-stone-800">Thẻ đã nhớ</h3>
+                    <p className="text-sm text-stone-500">{memorizedCards.length} / {questions.length} thẻ</p>
+                  </div>
+                </div>
+                <button
+                  onClick={resetMemorized}
+                  disabled={memorizedCards.length === 0}
+                  className="px-4 py-2 bg-stone-100 text-stone-600 font-bold rounded-xl text-sm active:bg-stone-200 disabled:opacity-50 transition-colors"
+                >
+                  Khôi phục
+                </button>
+              </div>
+
+              <div className="h-px w-full bg-stone-100"></div>
+
               {/* Quiz Length */}
               <div className="flex flex-col gap-3">
                 <div>
@@ -502,13 +594,13 @@ export default function App() {
                   <p className="text-sm text-stone-500">Mỗi lượt làm bài kiểm tra</p>
                 </div>
                 <div className="flex bg-stone-100 rounded-2xl p-1.5 gap-1">
-                  {[5, 10, 15].map(num => (
+                  {[15, 30, questions.length].map(num => (
                     <button
                       key={num}
                       onClick={() => updateQuizLength(num)}
                       className={`flex-1 no-select py-2.5 rounded-xl text-sm font-bold transition-all ${quizLength === num ? 'bg-white text-cyan-600 shadow-sm' : 'text-stone-500 hover:bg-stone-200/50'}`}
                     >
-                      {num === 15 ? 'Tất cả' : `${num} câu`}
+                      {num === questions.length ? 'Tất cả' : `${num} câu`}
                     </button>
                   ))}
                 </div>
@@ -546,7 +638,7 @@ export default function App() {
                 className="no-select w-full bg-cyan-600 text-white font-bold text-lg py-5 rounded-[2rem] shadow-xl shadow-cyan-600/20 active:scale-95 transition-transform flex items-center justify-center gap-2"
               >
                 <RotateCcw className="w-5 h-5" />
-                Làm Lại ({quizLength === 15 ? 'Tất cả' : quizLength} câu)
+                Làm Lại ({quizLength === questions.length ? 'Tất cả' : quizLength} câu)
               </button>
               <button 
                 onClick={returnHome}
