@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0891b2" />
+      <stop offset="50%" stop-color="#0e7490" />
+      <stop offset="100%" stop-color="#155e75" />
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde047" />
+      <stop offset="100%" stop-color="#eab308" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.25" />
+    </filter>
+  </defs>
+
+  <!-- Background rounded rect -->
+  <rect width="512" height="512" rx="110" fill="url(#bgGrad)" />
+
+  <!-- Inner subtle border -->
+  <rect x="16" y="16" width="480" height="480" rx="94" fill="none" stroke="#ffffff" stroke-opacity="0.15" stroke-width="4" />
+
+  <!-- Main Icon Graphic: Graduation Cap & Book -->
+  <g filter="url(#shadow)" transform="translate(40, 40) scale(0.84)">
+    <!-- Graduation Cap Top Diamond -->
+    <polygon points="256,90 440,185 256,280 72,185" fill="#ffffff" />
+    
+    <!-- Cap Lower band / Base -->
+    <path d="M 120,215 L 120,290 C 120,350 392,350 392,290 L 392,215 L 256,280 Z" fill="#e2e8f0" />
+
+    <!-- Tassel -->
+    <circle cx="256" cy="185" r="10" fill="url(#goldGrad)" />
+    <path d="M 256,185 Q 380,210 410,290" fill="none" stroke="url(#goldGrad)" stroke-width="8" stroke-linecap="round" />
+    <polygon points="410,290 398,345 422,345" fill="url(#goldGrad)" />
+
+    <!-- Open Book Below -->
+    <g transform="translate(0, 100)">
+      <!-- Left Page -->
+      <path d="M 256,330 Q 170,300 80,310 L 80,410 Q 170,400 256,430 Z" fill="#f8fafc" />
+      <!-- Right Page -->
+      <path d="M 256,330 Q 342,300 432,310 L 432,410 Q 342,400 256,430 Z" fill="#ffffff" />
+      <!-- Book spine line -->
+      <line x1="256" y1="330" x2="256" y2="430" stroke="#0891b2" stroke-width="6" stroke-linecap="round" />
+
+      <!-- Decorative page lines -->
+      <line x1="120" y1="345" x2="220" y2="355" stroke="#94a3b8" stroke-width="4" stroke-linecap="round" />
+      <line x1="120" y1="375" x2="200" y2="385" stroke="#cbd5e1" stroke-width="4" stroke-linecap="round" />
+
+      <line x1="292" y1="355" x2="392" y2="345" stroke="#94a3b8" stroke-width="4" stroke-linecap="round" />
+      <line x1="312" y1="385" x2="392" y2="375" stroke="#cbd5e1" stroke-width="4" stroke-linecap="round" />
+    </g>
+  </g>
+</svg>

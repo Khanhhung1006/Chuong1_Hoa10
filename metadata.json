@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "GVCN - THPT Nguyễn Trãi - BĐ",
+  "description": "Hệ thống quản lý lớp học toàn diện và hoạt động ngoại tuyến (Offline PWA) dành cho Giáo viên Chủ nhiệm THPT: hồ sơ học sinh, sơ đồ lớp, điểm danh, hạnh kiểm, thi đua, học tập, thu chi, lịch công tác, trợ lý AI và báo cáo chuẩn hóa.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

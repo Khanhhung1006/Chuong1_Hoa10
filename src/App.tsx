@@ -1,656 +1,1494 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { questions, Question } from './data/questions';
-import { audio } from './lib/audio';
-import { Play, ChevronLeft, ChevronRight, Award, CheckCircle2, XCircle, RotateCcw, Home, BrainCircuit, Layers, Settings, Volume2, VolumeX } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { storageService } from './services/storageService';
+import {
+  Student,
+  AttendanceRecord,
+  ViolationRecord,
+  RewardRecord,
+  GradeRecord,
+  ConductRecord,
+  ParentContactLog,
+  CalendarEvent,
+  FinancialTransaction,
+  DocumentItem,
+  DiaryEntry,
+  ClassSettings,
+  UserAccount,
+  AuthSession,
+  PendingApprovalItem,
+  PhoneRecord,
+} from './types';
+import { Header } from './components/common/Header';
+import { Sidebar, NavTab } from './components/common/Sidebar';
+import { MobileBottomNav } from './components/common/MobileBottomNav';
+import { StudentDetailDrawer } from './components/common/StudentDetailDrawer';
+import { StudentFormModal } from './components/common/StudentFormModal';
+import { ImportStudentsModal } from './components/common/ImportStudentsModal';
+import { StudentTransferData } from './components/common/StudentTransferModal';
+import { ConfirmDialog } from './components/common/ConfirmDialog';
+import { Snackbar } from './components/common/Snackbar';
+import { cloudSyncService, FullClassData } from './services/cloudSyncService';
 
-type ScreenState = 'home' | 'quiz' | 'result' | 'flashcards' | 'settings';
+// Views
+import { DashboardView } from './components/views/DashboardView';
+import { StudentsView } from './components/views/StudentsView';
+import { AttendanceView } from './components/views/AttendanceView';
+import { PhoneManagementView } from './components/views/PhoneManagementView';
+import { UniformCheckView } from './components/views/UniformCheckView';
+import { ViolationsRewardsView } from './components/views/ViolationsRewardsView';
+import { EmulationView } from './components/views/EmulationView';
+import { AcademicsView } from './components/views/AcademicsView';
+import { ConductView } from './components/views/ConductView';
+import { ParentContactView } from './components/views/ParentContactView';
+import { CalendarView } from './components/views/CalendarView';
+import { ReportsView } from './components/views/ReportsView';
+import { DocumentsView } from './components/views/DocumentsView';
+import { DiaryView } from './components/views/DiaryView';
+import { AIAssistantView } from './components/views/AIAssistantView';
+import { AnalyticsView } from './components/views/AnalyticsView';
+import { SettingsView } from './components/views/SettingsView';
+import { ApprovalsView } from './components/views/ApprovalsView';
+import { AuditLogsView } from './components/views/AuditLogsView';
+import { AdminDashboardView } from './components/views/AdminDashboardView';
+import { ClassAccountInitModal } from './components/views/ClassAccountInitModal';
+import { RolePermissionsModal } from './components/common/RolePermissionsModal';
+import { LoginScreen } from './components/auth/LoginScreen';
+import { ChangePasswordModal } from './components/auth/ChangePasswordModal';
+import { ForceChangePasswordModal } from './components/auth/ForceChangePasswordModal';
+import { authService } from './services/authService';
 
-interface AppStats {
-  totalQuestions: number;
-  correctAnswers: number;
-  quizzesCompleted: number;
-  lastScore: number | null;
+export function getDefaultTabForUser(user?: UserAccount): NavTab {
+  if (!user) return 'dashboard';
+  if (user.role === 'ADMIN') return 'admin';
+  if (user.role === 'GVCN') return 'dashboard';
+
+  const roleUpper = (user.role || '').toUpperCase();
+  const roleTitleLower = (user.roleTitle || '').toLowerCase();
+
+  if (roleUpper === 'LT' || roleTitleLower.includes('lớp trưởng')) {
+    return 'attendance';
+  }
+  if (roleUpper === 'TK' || roleTitleLower.includes('thư ký') || roleTitleLower.includes('thư kí')) {
+    return 'violations';
+  }
+  if (roleUpper.startsWith('TT') || roleTitleLower.includes('tổ trưởng')) {
+    return 'phones';
+  }
+
+  return 'attendance';
 }
 
-const INITIAL_STATS: AppStats = {
-  totalQuestions: 0,
-  correctAnswers: 0,
-  quizzesCompleted: 0,
-  lastScore: null,
-};
-
 export default function App() {
-  const [screen, setScreen] = useState<ScreenState>('home');
-  const [stats, setStats] = useState<AppStats>(INITIAL_STATS);
-  
-  // App Settings
-  const [isSoundEnabled, setIsSoundEnabled] = useState(true);
-  const [quizLength, setQuizLength] = useState<number>(10);
+  // Authentication State
+  const [session, setSession] = useState<AuthSession | null>(() => authService.getSession());
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [approvals, setApprovals] = useState<PendingApprovalItem[]>(() => authService.getApprovals());
+  const [approvalsBadgeCount, setApprovalsBadgeCount] = useState(0);
 
-  // Quiz State
-  const [currentQuizIndex, setCurrentQuizIndex] = useState(0);
-  const [quizQuestions, setQuizQuestions] = useState<Question[]>([]);
-  const [selectedOption, setSelectedOption] = useState<string | null>(null);
-  const [hasAnswered, setHasAnswered] = useState(false);
-  const [score, setScore] = useState(0);
+  // Initialize storage active class based on session
+  const initialClass = session?.user?.assignedClass
+    ? session.user.assignedClass.trim().toUpperCase()
+    : '11A1';
+  storageService.setActiveClass(initialClass);
 
-  // Flashcard State
-  const [fcIndex, setFcIndex] = useState(0);
-  const [fcFlipped, setFcFlipped] = useState(false);
-  const [memorizedCards, setMemorizedCards] = useState<number[]>([]);
+  // Navigation & Shell UI State
+  const [activeTab, setActiveTab] = useState<NavTab>(() => {
+    const currentSession = authService.getSession();
+    return getDefaultTabForUser(currentSession?.user);
+  });
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+  const [isRolePermissionsOpen, setIsRolePermissionsOpen] = useState<boolean>(false);
+  const [isClassInitModalOpen, setIsClassInitModalOpen] = useState<boolean>(false);
 
-  // Load stats & settings on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('chemistry_stats');
-    if (saved) {
-      try {
-        setStats(JSON.parse(saved));
-      } catch (e) {}
-    }
+  // Persistent Domain State from Local-First Storage (scoped to active class)
+  const [settings, setSettings] = useState<ClassSettings>(() => storageService.getSettings(initialClass));
+  const [students, setStudents] = useState<Student[]>(() => storageService.getStudents(initialClass));
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => storageService.getAttendance(initialClass));
+  const [phoneRecords, setPhoneRecords] = useState<PhoneRecord[]>(() => storageService.getPhoneRecords(initialClass));
+  const [violations, setViolations] = useState<ViolationRecord[]>(() => storageService.getViolations(initialClass));
+  const [rewards, setRewards] = useState<RewardRecord[]>(() => storageService.getRewards(initialClass));
+  const [grades, setGrades] = useState<GradeRecord[]>(() => storageService.getGrades(initialClass));
+  const [conducts, setConducts] = useState<ConductRecord[]>(() => storageService.getConducts(initialClass));
+  const [contactLogs, setContactLogs] = useState<ParentContactLog[]>(() => storageService.getParentContactLogs(initialClass));
+  const [events, setEvents] = useState<CalendarEvent[]>(() => storageService.getCalendarEvents(initialClass));
+  const [transactions, setTransactions] = useState<FinancialTransaction[]>(() => storageService.getFinancialTransactions(initialClass));
+  const [documents, setDocuments] = useState<DocumentItem[]>(() => storageService.getDocuments(initialClass));
+  const [diary, setDiary] = useState<DiaryEntry[]>(() => storageService.getDiaryEntries(initialClass));
 
-    const memorizedPref = localStorage.getItem('chemistry_memorized');
-    if (memorizedPref) {
-      try {
-        setMemorizedCards(JSON.parse(memorizedPref));
-      } catch (e) {}
-    }
+  // Drawers & Modals
+  const [selectedStudentForDrawer, setSelectedStudentForDrawer] = useState<Student | null>(null);
+  const [studentFormOpen, setStudentFormOpen] = useState(false);
+  const [studentToEdit, setStudentToEdit] = useState<Student | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-    const soundPref = localStorage.getItem('chemistry_sound');
-    if (soundPref !== null) {
-      const enabled = JSON.parse(soundPref);
-      setIsSoundEnabled(enabled);
-      audio.setMuted(!enabled);
-    }
-    
-    const quizLenPref = localStorage.getItem('chemistry_quiz_len');
-    if (quizLenPref) {
-      setQuizLength(JSON.parse(quizLenPref));
-    }
+  // Confirmation & Toast alerts
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
+
+  const [toast, setToast] = useState<{
+    message: string;
+    type: 'success' | 'info' | 'error' | 'warning';
+    isVisible: boolean;
+  }>({
+    message: '',
+    type: 'success',
+    isVisible: false,
+  });
+
+  const showToast = useCallback(
+    (message: string, type: 'success' | 'info' | 'error' | 'warning' = 'success') => {
+      setToast({ message, type, isVisible: true });
+    },
+    []
+  );
+
+  // Central function to switch and load class-scoped data
+  const loadClassData = useCallback((targetClass: string) => {
+    const safeClass = (targetClass || '11A1').trim().toUpperCase();
+    storageService.setActiveClass(safeClass);
+
+    const s = storageService.getSettings(safeClass);
+    setSettings(s);
+    setStudents(storageService.getStudents(safeClass));
+    setAttendance(storageService.getAttendance(safeClass));
+    setPhoneRecords(storageService.getPhoneRecords(safeClass));
+    setViolations(storageService.getViolations(safeClass));
+    setRewards(storageService.getRewards(safeClass));
+    setGrades(storageService.getGrades(safeClass));
+    setConducts(storageService.getConducts(safeClass));
+    setContactLogs(storageService.getParentContactLogs(safeClass));
+    setEvents(storageService.getCalendarEvents(safeClass));
+    setTransactions(storageService.getFinancialTransactions(safeClass));
+    setDocuments(storageService.getDocuments(safeClass));
+    setDiary(storageService.getDiaryEntries(safeClass));
+
+    cloudSyncService.initRealtimeSync(safeClass);
   }, []);
 
-  const updateStats = (newStats: Partial<AppStats>) => {
-    setStats(prev => {
-      const updated = { ...prev, ...newStats };
-      localStorage.setItem('chemistry_stats', JSON.stringify(updated));
-      return updated;
+  // Theme synchronization (Dark / Light mode)
+  useEffect(() => {
+    if (settings.darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [settings.darkMode]);
+
+  const toggleDarkMode = () => {
+    const nextMode = !settings.darkMode;
+    const updated = { ...settings, darkMode: nextMode };
+    setSettings(updated);
+    storageService.saveSettings(updated);
+  };
+
+  // Keep storageService active class aligned with settings
+  useEffect(() => {
+    if (settings.className) {
+      storageService.setActiveClass(settings.className);
+    }
+  }, [settings.className]);
+
+  useEffect(() => {
+    const handleAuthChange = (e: CustomEvent<{ session: AuthSession | null }>) => {
+      const newSession = e.detail.session;
+      setSession(newSession);
+      if (newSession?.user) {
+        const targetClass = newSession.user.assignedClass
+          ? newSession.user.assignedClass.trim().toUpperCase()
+          : '11A1';
+        loadClassData(targetClass);
+
+        if (newSession.user.role === 'ADMIN') {
+          setActiveTab('admin');
+        } else if (newSession.user.role === 'GVCN') {
+          setActiveTab('dashboard');
+          const cls = storageService
+            .getClasses()
+            .find((c) => c.className.toUpperCase() === targetClass);
+          const stList = storageService.getStudents(targetClass);
+          if (!cls?.isInitialized || stList.length === 0) {
+            setIsClassInitModalOpen(true);
+          }
+        } else {
+          setActiveTab(getDefaultTabForUser(newSession.user));
+        }
+      } else {
+        loadClassData('11A1');
+      }
+    };
+    window.addEventListener('edumaster_auth_change', handleAuthChange as EventListener);
+    const handleClassesChange = () => {
+      const currentSession = authService.getSession();
+      if (currentSession?.user) {
+        setSession({ ...currentSession });
+      }
+    };
+    window.addEventListener('edumaster_classes_change', handleClassesChange);
+
+    return () => {
+      window.removeEventListener('edumaster_auth_change', handleAuthChange as EventListener);
+      window.removeEventListener('edumaster_classes_change', handleClassesChange);
+    };
+  }, [loadClassData]);
+
+  useEffect(() => {
+    const updateApprovalsCount = () => {
+       const apps = authService.getApprovals();
+       setApprovals(apps || []);
+       setApprovalsBadgeCount((apps || []).filter(a => a.status === 'pending').length);
+    }
+    updateApprovalsCount();
+    window.addEventListener('edumaster_approvals_change', updateApprovalsCount);
+    return () => window.removeEventListener('edumaster_approvals_change', updateApprovalsCount);
+  }, []);
+
+  const handleLogout = () => {
+    authService.logout();
+    setSession(null);
+    loadClassData('11A1');
+  };
+
+  // Initialize Cloud Sync & Realtime Firestore synchronization
+  useEffect(() => {
+    // 1. Start listening to realtime changes from Firebase
+    cloudSyncService.initRealtimeSync(settings.className);
+
+    // 2. Handle remote data changes (when updated from another device/browser)
+    const unsubRemote = cloudSyncService.addRemoteDataListener((remoteData: FullClassData) => {
+      if (!remoteData) return;
+      if (remoteData.settings) {
+        setSettings(remoteData.settings);
+        storageService.saveSettings(remoteData.settings);
+      }
+      if (remoteData.students) {
+        setStudents(remoteData.students);
+        storageService.saveStudents(remoteData.students);
+      }
+      if (remoteData.attendance) {
+        setAttendance(remoteData.attendance);
+        storageService.saveAttendance(remoteData.attendance);
+      }
+      if (remoteData.violations) {
+        setViolations(remoteData.violations);
+        storageService.saveViolations(remoteData.violations);
+      }
+      if (remoteData.rewards) {
+        setRewards(remoteData.rewards);
+        storageService.saveRewards(remoteData.rewards);
+      }
+      if (remoteData.scores) {
+        setGrades(remoteData.scores);
+        storageService.saveScores(remoteData.scores);
+      }
+      if (remoteData.conduct) {
+        setConducts(remoteData.conduct);
+        storageService.saveConduct(remoteData.conduct);
+      }
+      if (remoteData.contacts) {
+        setContactLogs(remoteData.contacts);
+        storageService.saveContacts(remoteData.contacts);
+      }
+      if (remoteData.calendar) {
+        setEvents(remoteData.calendar);
+        storageService.saveCalendar(remoteData.calendar);
+      }
+      if (remoteData.finance) {
+        setTransactions(remoteData.finance);
+        storageService.saveFinance(remoteData.finance);
+      }
+      if (remoteData.documents) {
+        setDocuments(remoteData.documents);
+        storageService.saveDocuments(remoteData.documents);
+      }
+      if (remoteData.diary) {
+        setDiary(remoteData.diary);
+        storageService.saveDiary(remoteData.diary);
+      }
+      showToast('⚡ Dữ liệu lớp học vừa được đồng bộ tự động từ Đám mây!', 'info');
+    });
+
+    return () => {
+      unsubRemote();
+    };
+  }, [settings.className]);
+
+  // Automatically queue cloud sync whenever any state changes
+  useEffect(() => {
+    cloudSyncService.queueSync({
+      students,
+      attendance,
+      violations,
+      rewards,
+      scores: grades,
+      conduct: conducts,
+      contacts: contactLogs,
+      calendar: events,
+      finance: transactions,
+      documents,
+      diary,
+      settings,
+    });
+  }, [
+    students,
+    attendance,
+    violations,
+    rewards,
+    grades,
+    conducts,
+    contactLogs,
+    events,
+    transactions,
+    documents,
+    diary,
+    settings,
+  ]);
+
+  const handleManualSync = async () => {
+    showToast('Đang kết nối và đồng bộ lên Đám mây Firebase...', 'info');
+    const ok = await cloudSyncService.pushNow({
+      students,
+      attendance,
+      violations,
+      rewards,
+      scores: grades,
+      conduct: conducts,
+      contacts: contactLogs,
+      calendar: events,
+      finance: transactions,
+      documents,
+      diary,
+      settings,
+    });
+    if (ok) {
+      showToast('Đã đồng bộ toàn bộ dữ liệu lên Đám mây Firebase thành công!', 'success');
+    } else {
+      showToast('Chưa thể kết nối đám mây. Dữ liệu sẽ tự động đồng bộ khi có mạng.', 'warning');
+    }
+  };
+
+  const handleManualPull = async () => {
+    showToast('Đang kết nối và tải dữ liệu từ Đám mây Firebase...', 'info');
+    const remoteData = await cloudSyncService.pullFromFirestore(settings.className);
+    if (remoteData) {
+      if (remoteData.settings) {
+        setSettings(remoteData.settings);
+        storageService.saveSettings(remoteData.settings);
+      }
+      if (remoteData.students) {
+        setStudents(remoteData.students);
+        storageService.saveStudents(remoteData.students);
+      }
+      if (remoteData.attendance) {
+        setAttendance(remoteData.attendance);
+        storageService.saveAttendance(remoteData.attendance);
+      }
+      if (remoteData.violations) {
+        setViolations(remoteData.violations);
+        storageService.saveViolations(remoteData.violations);
+      }
+      if (remoteData.rewards) {
+        setRewards(remoteData.rewards);
+        storageService.saveRewards(remoteData.rewards);
+      }
+      if (remoteData.scores) {
+        setGrades(remoteData.scores);
+        storageService.saveScores(remoteData.scores);
+      }
+      if (remoteData.conduct) {
+        setConducts(remoteData.conduct);
+        storageService.saveConduct(remoteData.conduct);
+      }
+      if (remoteData.contacts) {
+        setContactLogs(remoteData.contacts);
+        storageService.saveContacts(remoteData.contacts);
+      }
+      if (remoteData.calendar) {
+        setEvents(remoteData.calendar);
+        storageService.saveCalendar(remoteData.calendar);
+      }
+      if (remoteData.finance) {
+        setTransactions(remoteData.finance);
+        storageService.saveFinance(remoteData.finance);
+      }
+      if (remoteData.documents) {
+        setDocuments(remoteData.documents);
+        storageService.saveDocuments(remoteData.documents);
+      }
+      if (remoteData.diary) {
+        setDiary(remoteData.diary);
+        storageService.saveDiary(remoteData.diary);
+      }
+      showToast('⚡ Đồng bộ tải dữ liệu từ Đám mây thành công!', 'success');
+    } else {
+      showToast('Không tìm thấy dữ liệu lớp này trên Đám mây hoặc có lỗi kết nối.', 'warning');
+    }
+  };
+
+  // Subscribe to storage change events to keep state synced
+  useEffect(() => {
+    const handleStorageChange = (e: Event) => {
+      const customEv = e as CustomEvent;
+      const key = (customEv.detail?.key || '').toString();
+
+      const currentClass = settings.className || '11A1';
+      const cleanClass = currentClass.replace(/[^a-zA-Z0-9]/g, '_');
+
+      // If key is provided, only update state if key belongs to active class
+      if (key && !key.toUpperCase().includes(cleanClass.toUpperCase())) {
+        return;
+      }
+
+      if (!key) return;
+
+      if (key.includes('students')) {
+        setStudents(storageService.getStudents(currentClass));
+      } else if (key.includes('attendance')) {
+        setAttendance(storageService.getAttendance(currentClass));
+      } else if (key.includes('phones')) {
+        setPhoneRecords(storageService.getPhoneRecords(currentClass));
+      } else if (key.includes('violations')) {
+        setViolations(storageService.getViolations(currentClass));
+      } else if (key.includes('rewards')) {
+        setRewards(storageService.getRewards(currentClass));
+      } else if (key.includes('scores')) {
+        setGrades(storageService.getGrades(currentClass));
+      } else if (key.includes('conduct')) {
+        setConducts(storageService.getConducts(currentClass));
+      } else if (key.includes('contacts')) {
+        setContactLogs(storageService.getParentContactLogs(currentClass));
+      } else if (key.includes('calendar')) {
+        setEvents(storageService.getCalendarEvents(currentClass));
+      } else if (key.includes('finance')) {
+        setTransactions(storageService.getFinancialTransactions(currentClass));
+      } else if (key.includes('documents')) {
+        setDocuments(storageService.getDocuments(currentClass));
+      } else if (key.includes('diary')) {
+        setDiary(storageService.getDiaryEntries(currentClass));
+      } else if (key.includes('settings')) {
+        setSettings(storageService.getSettings(currentClass));
+      }
+    };
+
+    window.addEventListener('edumaster_data_change', handleStorageChange);
+    return () => window.removeEventListener('edumaster_data_change', handleStorageChange);
+  }, [settings.className]);
+
+  // Student CRUD handlers
+  const handleSaveStudent = (studentData: Student) => {
+    storageService.saveStudent(studentData);
+    setStudents(storageService.getStudents());
+    showToast(
+      studentToEdit
+        ? `Đã cập nhật hồ sơ học sinh ${studentData.fullName}`
+        : `Đã thêm học sinh ${studentData.fullName} vào lớp ${settings.className}`,
+      'success'
+    );
+  };
+
+  const handleUpdateStudents = (updatedStudents: Student[]) => {
+    storageService.saveStudents(updatedStudents);
+    setStudents(storageService.getStudents());
+  };
+
+  const handleImportStudents = (importedList: Student[], mode: 'append' | 'replace') => {
+    if (mode === 'replace') {
+      storageService.saveStudents(importedList);
+      setStudents(importedList);
+      showToast(
+        `Đã thiết lập mới danh sách lớp ${settings.className} với ${importedList.length} học sinh từ file Excel!`,
+        'success'
+      );
+    } else {
+      const currentList = [...students];
+      let added = 0;
+      let updated = 0;
+
+      importedList.forEach((st) => {
+        const existingIdx = currentList.findIndex(
+          (s) => s.code.trim().toLowerCase() === st.code.trim().toLowerCase()
+        );
+        if (existingIdx >= 0) {
+          currentList[existingIdx] = {
+            ...currentList[existingIdx],
+            ...st,
+            id: currentList[existingIdx].id,
+          };
+          updated++;
+        } else {
+          currentList.push(st);
+          added++;
+        }
+      });
+
+      storageService.saveStudents(currentList);
+      setStudents(currentList);
+      showToast(
+        `Đã nhập thành công ${added} học sinh mới${
+          updated > 0 ? ` (cập nhật ${updated} học sinh trùng mã)` : ''
+        } từ file Excel!`,
+        'success'
+      );
+    }
+  };
+
+  const handleDeleteStudent = (
+    studentId: string,
+    name: string,
+    transferData?: StudentTransferData
+  ) => {
+    if (transferData) {
+      storageService.deleteStudent(studentId);
+      setStudents(storageService.getStudents());
+      const label =
+        transferData.transferType === 'transfer_class'
+          ? `Đã xử lý chuyển học sinh ${name} sang lớp ${transferData.targetDestination || 'mới'}`
+          : transferData.transferType === 'transfer_school'
+          ? `Đã xử lý chuyển trường cho học sinh ${name}`
+          : `Đã xóa học sinh ${name} khỏi danh sách lớp ${settings.className}`;
+      showToast(label, 'info');
+      return;
+    }
+
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Xóa học sinh khỏi lớp?',
+      message: `Bạn có chắc chắn muốn xóa học sinh "${name}" khỏi danh sách lớp ${settings.className}? Dữ liệu liên quan đến học sinh này sẽ bị xóa.`,
+      onConfirm: () => {
+        storageService.deleteStudent(studentId);
+        setStudents(storageService.getStudents());
+        setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+        showToast(`Đã xóa học sinh ${name}`, 'info');
+      },
     });
   };
 
-  const handleInteraction = () => {
-    audio.unlock();
-  };
-
-  const toggleSound = () => {
-    const newVal = !isSoundEnabled;
-    setIsSoundEnabled(newVal);
-    audio.setMuted(!newVal);
-    localStorage.setItem('chemistry_sound', JSON.stringify(newVal));
-    if (newVal) {
-      audio.unlock();
-      audio.playClick();
+  // Attendance Handlers
+  const checkDataLocked = (): boolean => {
+    const isTeacher = session?.user?.role === 'GVCN' || session?.user?.role === 'ADMIN';
+    if (!isTeacher && settings.isLockedData) {
+      showToast('Dữ liệu lớp học đã bị GVCN khóa, không thể chỉnh sửa hoặc báo cáo!', 'error');
+      return true;
     }
+    return false;
   };
 
-  const updateQuizLength = (num: number) => {
-    setQuizLength(num);
-    localStorage.setItem('chemistry_quiz_len', JSON.stringify(num));
-    handleInteraction();
-    audio.playClick();
-  };
+  const handleSaveMultipleAttendance = (records: AttendanceRecord[]) => {
+    if (checkDataLocked()) return;
+    const isTeacher = session?.user?.role === 'GVCN' || session?.user?.role === 'ADMIN';
+    const requireApproval = settings.requireApprovalAttendance !== false;
 
-  // --- Flashcards Logic ---
-  const activeQuestions = questions.filter(q => !memorizedCards.includes(q.id));
-
-  const startFlashcards = () => {
-    handleInteraction();
-    audio.playClick();
-    setFcIndex(0);
-    setFcFlipped(false);
-    setScreen('flashcards');
-  };
-
-  const handlePrevCard = () => {
-    handleInteraction();
-    audio.playClick();
-    if (fcFlipped) {
-      setFcFlipped(false);
-      setTimeout(() => setFcIndex(i => Math.max(0, i - 1)), 250);
-    } else {
-      setFcIndex(i => Math.max(0, i - 1));
-    }
-  };
-
-  const handleNextCard = () => {
-    handleInteraction();
-    audio.playClick();
-    if (fcFlipped) {
-      setFcFlipped(false);
-      setTimeout(() => setFcIndex(i => Math.min(activeQuestions.length - 1, i + 1)), 250);
-    } else {
-      setFcIndex(i => Math.min(activeQuestions.length - 1, i + 1));
-    }
-  };
-
-  const handleMarkMemorized = () => {
-    handleInteraction();
-    audio.playSuccess();
-    const currentId = activeQuestions[fcIndex]?.id;
-    if (!currentId) return;
-
-    const commit = () => {
-      const updated = [...memorizedCards, currentId];
-      setMemorizedCards(updated);
-      localStorage.setItem('chemistry_memorized', JSON.stringify(updated));
-      setFcIndex(prev => Math.max(0, prev >= activeQuestions.length - 1 ? prev - 1 : prev));
-    };
-
-    if (fcFlipped) {
-      setFcFlipped(false);
-      setTimeout(commit, 250);
-    } else {
-      commit();
-    }
-  };
-
-  const resetMemorized = () => {
-    handleInteraction();
-    audio.playClick();
-    setMemorizedCards([]);
-    localStorage.setItem('chemistry_memorized', JSON.stringify([]));
-  };
-
-  // --- Quiz Logic ---
-  const startQuiz = () => {
-    handleInteraction();
-    audio.playClick();
-    
-    // Pick N random questions and shuffle options
-    const limit = Math.min(quizLength, questions.length);
-    const shuffled = [...questions].sort(() => 0.5 - Math.random()).slice(0, limit);
-    const preparedQuestions = shuffled.map(q => ({
-      ...q,
-      options: [...q.options].sort(() => 0.5 - Math.random())
-    }));
-    
-    setQuizQuestions(preparedQuestions);
-    setCurrentQuizIndex(0);
-    setScore(0);
-    setSelectedOption(null);
-    setHasAnswered(false);
-    setScreen('quiz');
-  };
-
-  const handleOptionSelect = (option: string) => {
-    if (hasAnswered) return;
-    handleInteraction();
-    audio.playClick();
-    setSelectedOption(option);
-  };
-
-  const handleSubmitAnswer = () => {
-    if (!selectedOption || hasAnswered) return;
-    
-    const currentQ = quizQuestions[currentQuizIndex];
-    const isCorrect = selectedOption === currentQ.answer;
-    
-    if (isCorrect) {
-      audio.playSuccess();
-      setScore(s => s + 1);
-    } else {
-      audio.playError();
-    }
-    
-    setHasAnswered(true);
-  };
-
-  const handleNextQuestion = () => {
-    handleInteraction();
-    audio.playClick();
-    
-    const currentQ = quizQuestions[currentQuizIndex];
-    const isCorrect = selectedOption === currentQ.answer;
-
-    // Update stats cumulatively
-    const newStats = {
-      totalQuestions: stats.totalQuestions + 1,
-      correctAnswers: stats.correctAnswers + (isCorrect ? 1 : 0),
-    };
-
-    if (currentQuizIndex < quizQuestions.length - 1) {
-      updateStats(newStats);
-      setCurrentQuizIndex(i => i + 1);
-      setSelectedOption(null);
-      setHasAnswered(false);
-    } else {
-      // Finish quiz
-      updateStats({
-        ...newStats,
-        quizzesCompleted: stats.quizzesCompleted + 1,
-        lastScore: score + (isCorrect ? 1 : 0)
+    if (isTeacher || !requireApproval) {
+      const currentList = storageService.getAttendance();
+      const updated = [...currentList];
+      records.forEach((rec) => {
+        const idx = updated.findIndex(
+          (a) =>
+            a.studentId === rec.studentId &&
+            a.date === rec.date &&
+            a.session === rec.session &&
+            a.period === rec.period
+        );
+        if (idx >= 0) {
+          updated[idx] = rec;
+        } else {
+          updated.push(rec);
+        }
       });
-      setScreen('result');
+      storageService.saveAttendance(updated);
+      setAttendance(updated);
+      if (isTeacher) {
+        showToast('Đã lưu dữ liệu điểm danh thành công!', 'success');
+      } else {
+        showToast('Đã ghi nhận trực tiếp điểm danh (Cài đặt GVCN không yêu cầu duyệt)!', 'success');
+      }
+    } else {
+      authService.submitApproval({
+        type: 'attendance_multiple',
+        title: 'Báo cáo điểm danh',
+        description: `Báo cáo điểm danh cho ${records.length} bản ghi`,
+        submittedBy: {
+          username: session?.user?.username || 'unknown',
+          displayName: session?.user?.displayName || 'Cán sự',
+          role: session?.user?.role || 'HS',
+          roleTitle: session?.user?.roleTitle || 'Cán sự',
+        },
+        attendanceRecords: records,
+      });
+      showToast('Đã gửi báo cáo điểm danh cho GVCN duyệt!', 'info');
     }
   };
 
-  const returnHome = () => {
-    handleInteraction();
-    audio.playClick();
-    setScreen('home');
+  const handleSavePhoneRecords = (records: PhoneRecord[]) => {
+    if (checkDataLocked()) return;
+    const isTeacher = session?.user?.role === 'GVCN' || session?.user?.role === 'ADMIN';
+    const requireApproval = settings.requireApprovalAttendance !== false;
+
+    if (isTeacher || !requireApproval) {
+      const cls = (settings.className || '11A1').trim().toUpperCase();
+      const currentList = storageService.getPhoneRecords(cls);
+      const updated = [...currentList];
+      records.forEach((rec) => {
+        const idx = updated.findIndex(
+          (p) =>
+            p.studentId === rec.studentId &&
+            p.date === rec.date &&
+            (p.session || 'Sáng') === (rec.session || 'Sáng')
+        );
+        if (idx >= 0) {
+          updated[idx] = rec;
+        } else {
+          updated.push(rec);
+        }
+      });
+      storageService.savePhoneRecords(updated, cls);
+      setPhoneRecords(updated);
+      showToast('Đã lưu báo cáo nộp điện thoại thành công!', 'success');
+    } else {
+      authService.submitApproval({
+        type: 'attendance_multiple',
+        title: 'Báo cáo thu nộp điện thoại',
+        description: `Báo cáo thu nộp điện thoại cho ${records.length} học sinh`,
+        submittedBy: {
+          username: session?.user?.username || 'unknown',
+          displayName: session?.user?.displayName || 'Cán sự',
+          role: session?.user?.role || 'HS',
+          roleTitle: session?.user?.roleTitle || 'Cán sự',
+        },
+        attendanceRecords: records.map(r => ({
+          id: r.id,
+          date: r.date,
+          session: r.session,
+          studentId: r.studentId,
+          status: r.status === 'submitted' ? 'Đã nộp ĐT' : r.status === 'not_submitted' ? 'Không nộp ĐT' : 'Không mang ĐT',
+          note: r.note,
+        })),
+      });
+      showToast('Đã gửi báo cáo thu nộp điện thoại cho GVCN duyệt!', 'info');
+    }
   };
 
-  const accuracy = stats.totalQuestions > 0 
-    ? Math.round((stats.correctAnswers / stats.totalQuestions) * 100) 
-    : 0;
+  // Violations & Rewards Handlers
+  const handleAddViolation = (v: ViolationRecord) => {
+    if (checkDataLocked()) return;
+    const isTeacher = session?.user?.role === 'GVCN' || session?.user?.role === 'ADMIN';
+    const requireApproval = settings.requireApprovalViolationsRewards !== false;
+
+    if (isTeacher || !requireApproval) {
+      storageService.addViolation(v);
+      setViolations(storageService.getViolations());
+      if (isTeacher) {
+        showToast('Đã thêm biên bản vi phạm kỷ luật', 'success');
+      } else {
+        showToast('Đã ghi nhận trực tiếp vi phạm (Cài đặt GVCN không yêu cầu duyệt)!', 'success');
+      }
+    } else {
+      const student = students.find(s => s.id === v.studentId);
+      authService.submitApproval({
+        type: 'violation',
+        title: 'Báo cáo vi phạm',
+        description: `Học sinh ${student?.fullName || v.studentId} vi phạm: ${v.content}`,
+        submittedBy: {
+          username: session?.user?.username || 'unknown',
+          displayName: session?.user?.displayName || 'Cán sự',
+          role: session?.user?.role || 'HS',
+          roleTitle: session?.user?.roleTitle || 'Cán sự',
+        },
+        violationRecord: v,
+      });
+      showToast('Đã gửi báo cáo vi phạm cho GVCN duyệt!', 'info');
+    }
+  };
+
+  const handleDeleteViolation = (id: string) => {
+    if (checkDataLocked()) return;
+    storageService.deleteViolation(id);
+    setViolations(storageService.getViolations());
+    showToast('Đã xóa biên bản vi phạm kỷ luật', 'info');
+  };
+
+  const handleAddReward = (r: RewardRecord) => {
+    if (checkDataLocked()) return;
+    const isTeacher = session?.user?.role === 'GVCN' || session?.user?.role === 'ADMIN';
+    const requireApproval = settings.requireApprovalViolationsRewards !== false;
+
+    if (isTeacher || !requireApproval) {
+      storageService.addReward(r);
+      setRewards(storageService.getRewards());
+      if (isTeacher) {
+        showToast('Đã thêm bản ghi tuyên dương', 'success');
+      } else {
+        showToast('Đã ghi nhận trực tiếp tuyên dương (Cài đặt GVCN không yêu cầu duyệt)!', 'success');
+      }
+    } else {
+      const student = students.find(s => s.id === r.studentId);
+      authService.submitApproval({
+        type: 'reward',
+        title: 'Đề xuất tuyên dương',
+        description: `Đề xuất tuyên dương ${student?.fullName || r.studentId}: ${r.content}`,
+        submittedBy: {
+          username: session?.user?.username || 'unknown',
+          displayName: session?.user?.displayName || 'Cán sự',
+          role: session?.user?.role || 'HS',
+          roleTitle: session?.user?.roleTitle || 'Cán sự',
+        },
+        rewardRecord: r,
+      });
+      showToast('Đã gửi đề xuất tuyên dương cho GVCN duyệt!', 'info');
+    }
+  };
+
+  const handleDeleteReward = (id: string) => {
+    if (checkDataLocked()) return;
+    storageService.deleteReward(id);
+    setRewards(storageService.getRewards());
+    showToast('Đã xóa bản ghi khen thưởng', 'info');
+  };
+
+  const handleSaveMultipleRewards = (newRewards: RewardRecord[]) => {
+    if (checkDataLocked()) return;
+    const isTeacher = session?.user?.role === 'GVCN' || session?.user?.role === 'ADMIN';
+    const requireApproval = settings.requireApprovalViolationsRewards !== false;
+
+    if (isTeacher || !requireApproval) {
+      const currentList = storageService.getRewards();
+      const merged = [...newRewards];
+      const newIds = new Set(newRewards.map(r => r.id));
+      currentList.forEach(rec => {
+        if (!newIds.has(rec.id)) {
+          merged.push(rec);
+        }
+      });
+      storageService.saveRewards(merged);
+      setRewards(storageService.getRewards());
+      if (isTeacher) {
+        showToast('Đã lưu danh sách tuyên dương thành công!', 'success');
+      } else {
+        showToast('Đã ghi nhận trực tiếp điểm tốt (Cài đặt GVCN không yêu cầu duyệt)!', 'success');
+      }
+    } else {
+      authService.submitApproval({
+        type: 'reward_multiple',
+        title: 'Báo cáo điểm tốt',
+        description: `Báo cáo điểm tốt cập nhật danh sách`,
+        submittedBy: {
+          username: session?.user?.username || 'unknown',
+          displayName: session?.user?.displayName || 'Cán sự',
+          role: session?.user?.role || 'HS',
+          roleTitle: session?.user?.roleTitle || 'Cán sự',
+        },
+        rewardRecords: newRewards,
+      });
+      showToast('Đã gửi báo cáo điểm tốt cho GVCN duyệt!', 'info');
+    }
+  };
+
+  const handleSaveMultipleViolations = (newViolations: ViolationRecord[]) => {
+    if (checkDataLocked()) return;
+    const isTeacher = session?.user?.role === 'GVCN' || session?.user?.role === 'ADMIN';
+    const requireApproval = settings.requireApprovalViolationsRewards !== false;
+
+    if (isTeacher || !requireApproval) {
+      const currentList = storageService.getViolations();
+      const merged = [...newViolations];
+      const newIds = new Set(newViolations.map(v => v.id));
+      currentList.forEach(rec => {
+        if (!newIds.has(rec.id)) {
+          merged.push(rec);
+        }
+      });
+      storageService.saveViolations(merged);
+      setViolations(storageService.getViolations());
+      if (isTeacher) {
+        showToast('Đã lưu danh sách vi phạm thành công!', 'success');
+      } else {
+        showToast('Đã ghi nhận trực tiếp điểm kém (Cài đặt GVCN không yêu cầu duyệt)!', 'success');
+      }
+    } else {
+      authService.submitApproval({
+        type: 'violation_multiple',
+        title: 'Báo cáo điểm kém',
+        description: `Báo cáo điểm kém cập nhật danh sách`,
+        submittedBy: {
+          username: session?.user?.username || 'unknown',
+          displayName: session?.user?.displayName || 'Cán sự',
+          role: session?.user?.role || 'HS',
+          roleTitle: session?.user?.roleTitle || 'Cán sự',
+        },
+        violationRecords: newViolations,
+      });
+      showToast('Đã gửi báo cáo điểm kém cho GVCN duyệt!', 'info');
+    }
+  };
+
+  // Grades & Conduct Handlers
+  const handleSaveGrade = (g: GradeRecord) => {
+    storageService.saveGrade(g);
+    setGrades(storageService.getGrades());
+  };
+
+  const handleSaveConduct = (c: ConductRecord | ConductRecord[]) => {
+    if (Array.isArray(c)) {
+      const cls = (settings.className || '11A1').trim().toUpperCase();
+      const list = storageService.getConducts(cls);
+      c.forEach((record) => {
+        const idx = list.findIndex((x) => x.id === record.id);
+        if (idx >= 0) {
+          list[idx] = record;
+        } else {
+          list.push(record);
+        }
+      });
+      storageService.saveConduct(list, cls);
+      setConducts(list);
+    } else {
+      storageService.saveConductRecord(c);
+      setConducts(storageService.getConducts());
+    }
+  };
+
+  // Parent contact Handlers
+  const handleAddContactLog = (log: ParentContactLog) => {
+    storageService.saveParentContactLog(log);
+    setContactLogs(storageService.getParentContactLogs());
+  };
+
+  const handleDeleteContactLog = (id: string) => {
+    storageService.deleteParentContactLog(id);
+    setContactLogs(storageService.getParentContactLogs());
+    showToast('Đã xóa nhật ký liên lạc', 'info');
+  };
+
+  // Calendar Event Handlers
+  const handleAddCalendarEvent = (ev: CalendarEvent) => {
+    storageService.saveCalendarEvent(ev);
+    setEvents(storageService.getCalendarEvents());
+  };
+
+  const handleDeleteCalendarEvent = (id: string) => {
+    storageService.deleteCalendarEvent(id);
+    setEvents(storageService.getCalendarEvents());
+    showToast('Đã xóa sự kiện lịch công tác', 'info');
+  };
+
+  // Finance Handlers
+  const handleAddTransaction = (tx: FinancialTransaction) => {
+    storageService.saveFinancialTransaction(tx);
+    setTransactions(storageService.getFinancialTransactions());
+  };
+
+  const handleDeleteTransaction = (id: string) => {
+    storageService.deleteFinancialTransaction(id);
+    setTransactions(storageService.getFinancialTransactions());
+    showToast('Đã xóa giao dịch quỹ', 'info');
+  };
+
+  // Document Handlers
+  const handleAddDocument = (doc: DocumentItem) => {
+    storageService.saveDocument(doc);
+    setDocuments(storageService.getDocuments());
+  };
+
+  // Diary Handlers
+  const handleAddDiaryEntry = (entry: DiaryEntry) => {
+    storageService.saveDiaryEntry(entry);
+    setDiary(storageService.getDiaryEntries());
+  };
+
+  const handleDeleteDiaryEntry = (id: string) => {
+    storageService.deleteDiaryEntry(id);
+    setDiary(storageService.getDiaryEntries());
+    showToast('Đã xóa mục nhật ký', 'info');
+  };
+
+  // Settings & Reset
+  const handleUpdateSettings = (newSettings: ClassSettings) => {
+    storageService.saveSettings(newSettings);
+    setSettings(newSettings);
+  };
+
+  const handleResetData = () => {
+    storageService.resetToInitialMock();
+    setSettings(storageService.getSettings());
+    setStudents(storageService.getStudents());
+    setAttendance(storageService.getAttendance());
+    setViolations(storageService.getViolations());
+    setRewards(storageService.getRewards());
+    setGrades(storageService.getGrades());
+    setConducts(storageService.getConducts());
+    setContactLogs(storageService.getParentContactLogs());
+    setEvents(storageService.getCalendarEvents());
+    setTransactions(storageService.getFinancialTransactions());
+    setDocuments(storageService.getDocuments());
+    setDiary(storageService.getDiaryEntries());
+  };
+
+  // Badge counters for sidebar
+  const todayStr = '2026-09-14';
+  const absentTodayCount = (attendance || []).filter(
+    (a) => a.date === todayStr && (a.status === 'Vắng có phép' || a.status === 'Vắng không phép')
+  ).length;
+
+  const urgentAttentionCount = (students || []).filter((s) => s.specialAttention).length;
+
+  if (!session) {
+    return (
+      <LoginScreen
+        academicYear={settings.academicYear}
+        onLoginSuccess={(newSession) => {
+          setSession(newSession);
+          const targetClass = newSession.user.assignedClass
+            ? newSession.user.assignedClass.trim().toUpperCase()
+            : '11A1';
+          loadClassData(targetClass);
+
+          if (newSession.user.role === 'ADMIN') {
+            setActiveTab('admin');
+          } else if (newSession.user.role === 'GVCN') {
+            setActiveTab('dashboard');
+            // If class uninitialized or has no students, prompt 6-step initialization wizard
+            const cls = storageService
+              .getClasses()
+              .find((c) => c.className.toUpperCase() === targetClass);
+            const classStudents = storageService.getStudents(targetClass);
+            if (!cls?.isInitialized || classStudents.length === 0) {
+              setIsClassInitModalOpen(true);
+            }
+          } else {
+            setActiveTab(getDefaultTabForUser(newSession.user));
+          }
+        }}
+      />
+    );
+  }
+
+  if (session.user.mustChangePassword) {
+    return (
+      <ForceChangePasswordModal
+        user={session.user}
+        onLogout={handleLogout}
+        onPasswordChanged={() => {
+          setSession(authService.getSession());
+        }}
+      />
+    );
+  }
+
+  const userGroup = session?.user?.group || (session?.user?.role?.startsWith('TT') ? parseInt(session.user.role.replace('TT', ''), 10) : undefined);
 
   return (
-    <div className="w-full max-w-md mx-auto min-h-[100dvh] flex flex-col bg-stone-50 relative safe-pt safe-pb shadow-2xl shadow-stone-200/50 text-stone-800">
-      <AnimatePresence mode="wait">
-        {screen === 'home' && (
-          <motion.div 
-            key="home"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, x: -50 }}
-            className="flex-1 flex flex-col p-6 space-y-8 relative"
-          >
-            <button 
-              onClick={() => { handleInteraction(); audio.playClick(); setScreen('settings'); }}
-              className="absolute top-6 right-6 p-2 text-stone-400 hover:text-stone-600 active:bg-stone-100 rounded-full transition-colors"
-            >
-              <Settings className="w-6 h-6" />
-            </button>
-            <div className="text-center mt-8 mb-2 space-y-4">
-              <div className="w-20 h-20 bg-cyan-600 rounded-3xl mx-auto flex items-center justify-center shadow-lg shadow-cyan-600/30">
-                <BrainCircuit className="w-10 h-10 text-white" />
-              </div>
-              <h1 className="text-3xl font-extrabold tracking-tight text-stone-800">
-                Hóa 10 - Thầy Quân
-              </h1>
-              <p className="text-stone-500">Ôn tập chương 1</p>
-            </div>
+    <div id="edumaster-app" className="min-h-screen bg-slate-100/70 dark:bg-slate-950 flex flex-col font-sans transition-colors">
+      {/* Sticky Header */}
+      <Header
+        settings={settings}
+        onToggleSidebar={() => {
+          if (window.innerWidth < 1024) {
+            setIsMobileSidebarOpen((prev) => !prev);
+          } else {
+            setIsSidebarCollapsed((prev) => !prev);
+          }
+        }}
+        onToggleDarkMode={toggleDarkMode}
+        onOpenAI={() => setActiveTab('ai')}
+        onSelectStudent={(st) => setSelectedStudentForDrawer(st)}
+        allStudents={students}
+        currentUser={session.user}
+        onLogout={handleLogout}
+        onOpenChangePassword={() => setShowChangePassword(true)}
+        pendingApprovalsCount={approvalsBadgeCount}
+        onOpenApprovals={() => setActiveTab('approvals' as NavTab)}
+        onOpenClassInitModal={() => setIsClassInitModalOpen(true)}
+        onOpenAdminDashboard={() => setActiveTab('admin')}
+        onNavigateToStudents={() => setActiveTab('students')}
+      />
 
-            <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200 flex flex-col gap-4">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-stone-400">Tiến độ học tập</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100">
-                  <p className="text-3xl font-black text-stone-800">{stats.quizzesCompleted}</p>
-                  <p className="text-xs font-semibold text-stone-500 mt-1">BÀI ĐÃ LÀM</p>
-                </div>
-                <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100">
-                  <p className="text-3xl font-black text-cyan-600">{accuracy}%</p>
-                  <p className="text-xs font-semibold text-stone-500 mt-1">ĐỘ CHÍNH XÁC</p>
-                </div>
-              </div>
-            </div>
+      {/* Main Body with Fixed/Sticky Sidebar and Content Stage */}
+      <div className="flex-1 flex w-full">
+        <Sidebar
+          currentTab={activeTab}
+          onSelectTab={(tab) => {
+            setActiveTab(tab);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
+          isOpenMobile={isMobileSidebarOpen}
+          onCloseMobile={() => setIsMobileSidebarOpen(false)}
+          badgeCounts={{
+            absentToday: absentTodayCount,
+            violationsCount: violations.length,
+            urgentAttention: urgentAttentionCount,
+          }}
+          currentUser={session.user}
+          onLogout={handleLogout}
+        />
 
-            <div className="flex flex-col gap-4 mt-auto pb-4">
-              {/* Thẻ học tập */}
-              <button 
-                onClick={startFlashcards} 
-                className="no-select w-full bg-amber-100 text-amber-800 hover:bg-amber-200 active:bg-amber-300 font-bold text-lg py-4 rounded-2xl transition-colors flex items-center justify-center gap-2"
-              >
-                <Layers className="w-6 h-6" />
-                Thẻ Học Tập (Flashcards)
-              </button>
+        {/* Dynamic View Content Area */}
+        <main
+          id="main-stage"
+          className="flex-1 p-3 sm:p-6 lg:p-8 pb-24 lg:pb-8 max-w-7xl mx-auto w-full transition-all duration-300"
+        >
+          {activeTab === 'admin' && (
+            <AdminDashboardView
+              onShowToast={showToast}
+              onNavigateToAuditLogs={() => setActiveTab('audit_logs')}
+              onSelectClass={(selectedClass) => {
+                loadClassData(selectedClass);
+                setActiveTab('dashboard');
+                showToast(`Đã chuyển sang xem dữ liệu lớp ${selectedClass}`, 'info');
+              }}
+            />
+          )}
 
-              {/* Trắc nghiệm */}
-              <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200 flex flex-col gap-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-bold text-stone-700 flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5 text-cyan-500"/>
-                    Trắc Nghiệm ({quizLength === questions.length ? 'Tất cả' : quizLength} câu)
-                  </h3>
-                </div>
-                <button 
-                  onClick={startQuiz} 
-                  className="no-select w-full bg-cyan-600 hover:bg-cyan-700 active:bg-cyan-800 text-white font-bold text-lg py-4 rounded-2xl shadow-lg shadow-cyan-600/20 transition-transform active:scale-95 flex items-center justify-center gap-2"
-                >
-                  <Play className="w-6 h-6 fill-current" />
-                  Bắt Đầu Thi
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        )}
+          {activeTab === 'dashboard' && (
+            <DashboardView
+              students={students}
+              attendance={attendance}
+              violations={violations}
+              rewards={rewards}
+              events={events}
+              settings={settings}
+              phoneRecords={phoneRecords}
+              onNavigate={(tab) => setActiveTab(tab)}
+              onOpenStudentDetail={(st) => setSelectedStudentForDrawer(st)}
+              onOpenAI={() => setActiveTab('ai')}
+              onOpenClassInitModal={() => setIsClassInitModalOpen(true)}
+            />
+          )}
 
-        {screen === 'flashcards' && (
-          <motion.div 
-            key="flashcards"
-            initial={{ opacity: 0, x: 50 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -50 }}
-            className="flex-1 flex flex-col"
-          >
-            {activeQuestions.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
-                <div className="w-24 h-24 bg-emerald-100 rounded-full flex items-center justify-center mb-6">
-                    <CheckCircle2 className="w-12 h-12 text-emerald-500" />
-                </div>
-                <h2 className="text-2xl font-bold text-stone-800 mb-2">Tuyệt vời!</h2>
-                <p className="text-stone-500 mb-8">Bạn đã thuộc tất cả {questions.length} thẻ học tập.</p>
-                <button 
-                  onClick={resetMemorized} 
-                  className="no-select w-full bg-cyan-600 text-white font-bold text-lg py-4 rounded-2xl shadow-lg shadow-cyan-600/20 active:scale-95 transition-transform"
-                >
-                  Học lại từ đầu
-                </button>
-                <button 
-                  onClick={returnHome} 
-                  className="no-select w-full mt-4 bg-white border-2 border-stone-200 text-stone-700 font-bold text-lg py-4 rounded-2xl active:bg-stone-50 transition-colors"
-                >
-                  Về trang chủ
-                </button>
-              </div>
-            ) : (
-              <>
-                {/* Header */}
-                <div className="px-6 pt-6 pb-4 flex items-center justify-between bg-stone-50 sticky top-0 z-10">
-                  <button 
-                    onClick={returnHome}
-                    className="no-select w-10 h-10 flex items-center justify-center rounded-full bg-white shadow-sm border border-stone-200 text-stone-600 active:bg-stone-100 transition-colors"
-                  >
-                    <ChevronLeft className="w-6 h-6" />
-                  </button>
-                  <div className="font-bold text-stone-400">
-                    Thẻ {fcIndex + 1} / {activeQuestions.length}
-                  </div>
-                  <div className="w-10"></div>
-                </div>
+          {activeTab === 'students' && (
+            <StudentsView
+              students={students}
+              settings={settings}
+              currentUser={session.user}
+              onOpenStudentDetail={(st) => setSelectedStudentForDrawer(st)}
+              onOpenAddStudent={() => {
+                setStudentToEdit(null);
+                setStudentFormOpen(true);
+              }}
+              onOpenImportExcel={() => setIsImportModalOpen(true)}
+              onEditStudent={(st) => {
+                setStudentToEdit(st);
+                setStudentFormOpen(true);
+              }}
+              onDeleteStudent={handleDeleteStudent}
+              onUpdateStudents={handleUpdateStudents}
+              onShowToast={showToast}
+            />
+          )}
 
-                {/* Card Container */}
-                <div className="flex-1 px-6 py-8 flex flex-col perspective">
-                  <motion.div
-                    className="w-full flex-1 relative preserve-3d cursor-pointer"
-                    animate={{ rotateY: fcFlipped ? 180 : 0 }}
-                    transition={{ duration: 0.5, type: 'spring', stiffness: 260, damping: 20 }}
-                    onClick={() => {
-                      handleInteraction();
-                      audio.playClick();
-                      setFcFlipped(!fcFlipped);
-                    }}
-                  >
-                    {/* Front */}
-                    <div className="absolute inset-0 backface-hidden bg-white rounded-3xl p-8 shadow-xl border border-stone-200 flex flex-col items-center justify-center text-center gap-6">
-                      <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mb-2">
-                         <span className="text-2xl font-black text-amber-500">Q</span>
-                      </div>
-                      <h2 className="text-2xl font-bold text-stone-800 leading-snug">
-                        {activeQuestions[fcIndex]?.question}
-                      </h2>
-                      <p className="text-stone-400 text-sm mt-auto font-medium">Chạm để xem đáp án</p>
-                    </div>
-                    
-                    {/* Back */}
-                    <div className="absolute inset-0 backface-hidden rotate-y-180 bg-cyan-600 rounded-3xl p-8 shadow-xl flex flex-col items-center justify-center text-center gap-6 text-white">
-                      <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mb-2">
-                         <span className="text-2xl font-black text-white">A</span>
-                      </div>
-                      <h2 className="text-2xl font-bold leading-snug">
-                        {activeQuestions[fcIndex]?.answer}
-                      </h2>
-                      <p className="text-cyan-100 text-sm mt-auto font-medium">Chạm để lật lại</p>
-                    </div>
-                  </motion.div>
-                </div>
+          {activeTab === 'attendance' && (
+            <AttendanceView
+              students={students}
+              attendance={attendance}
+              settings={settings}
+              onSaveAttendance={handleSaveMultipleAttendance}
+              onShowToast={showToast}
+              currentUserGroup={userGroup}
+              currentUser={session.user}
+            />
+          )}
 
-                {/* Controls */}
-                <div className="p-6 pb-safe flex flex-col gap-4">
-                  <button
-                    onClick={handleMarkMemorized}
-                    className="no-select w-full bg-emerald-100 text-emerald-700 hover:bg-emerald-200 active:bg-emerald-300 font-bold text-lg py-4 rounded-2xl transition-colors flex items-center justify-center gap-2"
-                  >
-                    <CheckCircle2 className="w-6 h-6" /> Đã nhớ (Không hiện lại)
-                  </button>
-                  <div className="flex items-center justify-between gap-4">
-                    <button
-                      onClick={handlePrevCard}
-                      disabled={fcIndex === 0}
-                      className="no-select flex-1 bg-white border-2 border-stone-200 text-stone-700 font-bold text-lg py-4 rounded-2xl active:bg-stone-50 transition-colors disabled:opacity-50 disabled:active:bg-white flex justify-center items-center"
-                    >
-                      <ChevronLeft className="w-6 h-6 mr-1" /> Trước
-                    </button>
-                    <button
-                      onClick={handleNextCard}
-                      disabled={fcIndex === activeQuestions.length - 1}
-                      className="no-select flex-1 bg-amber-100 text-amber-800 font-bold text-lg py-4 rounded-2xl active:bg-amber-200 transition-colors disabled:opacity-50 flex justify-center items-center"
-                    >
-                      Tiếp <ChevronRight className="w-6 h-6 ml-1" />
-                    </button>
-                  </div>
-                </div>
-              </>
-            )}
-          </motion.div>
-        )}
+          {activeTab === 'phones' && (
+            <PhoneManagementView
+              students={students}
+              phoneRecords={phoneRecords}
+              settings={settings}
+              onSavePhoneRecords={handleSavePhoneRecords}
+              onAddViolation={handleAddViolation}
+              onShowToast={showToast}
+              currentUserGroup={userGroup}
+              currentUser={session.user}
+              onNavigate={setActiveTab}
+            />
+          )}
 
-        {screen === 'quiz' && quizQuestions.length > 0 && (
-          <motion.div 
-            key="quiz"
-            initial={{ opacity: 0, x: 50 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -50 }}
-            className="flex-1 flex flex-col"
-          >
-            {/* Header */}
-            <div className="px-6 pt-6 pb-4 flex items-center justify-between border-b border-stone-200 bg-white sticky top-0 z-10">
-              <button 
-                onClick={returnHome}
-                className="no-select w-10 h-10 flex items-center justify-center rounded-full bg-stone-100 text-stone-600 active:bg-stone-200 transition-colors"
-              >
-                <ChevronLeft className="w-6 h-6" />
-              </button>
-              <div className="font-bold text-stone-400">
-                Câu {currentQuizIndex + 1} / {quizQuestions.length}
-              </div>
-              <div className="w-10"></div>
-            </div>
+          {activeTab === 'uniformCheck' && (
+            <UniformCheckView
+              students={students}
+              violations={violations}
+              settings={settings}
+              onSaveMultipleViolations={handleSaveMultipleViolations}
+              onShowToast={showToast}
+              currentUserGroup={userGroup}
+              currentUser={session.user}
+              onNavigate={setActiveTab}
+            />
+          )}
 
-            {/* Progress Bar */}
-            <div className="w-full h-1 bg-stone-100">
-              <motion.div 
-                className="h-full bg-cyan-600"
-                initial={{ width: 0 }}
-                animate={{ width: `${((currentQuizIndex + 1) / quizQuestions.length) * 100}%` }}
-                transition={{ duration: 0.3 }}
-              />
-            </div>
+          {activeTab === 'violations' && (
+            <ViolationsRewardsView
+              students={students}
+              violations={violations}
+              rewards={rewards}
+              initialTab="violations"
+              onAddViolation={handleAddViolation}
+              onDeleteViolation={handleDeleteViolation}
+              onAddReward={handleAddReward}
+              onDeleteReward={handleDeleteReward}
+              onSaveMultipleRewards={handleSaveMultipleRewards}
+              onSaveMultipleViolations={handleSaveMultipleViolations}
+              onShowToast={showToast}
+              currentUserGroup={userGroup}
+              settings={settings}
+              currentUser={session.user || undefined}
+            />
+          )}
 
-            {/* Question */}
-            <div className="flex-1 p-6 flex flex-col gap-8 overflow-y-auto">
-              <h2 className="text-2xl font-bold text-stone-800 leading-snug">
-                {quizQuestions[currentQuizIndex].question}
-              </h2>
+          {activeTab === 'rewards' && (
+            <ViolationsRewardsView
+              students={students}
+              violations={violations}
+              rewards={rewards}
+              initialTab="rewards"
+              onAddViolation={handleAddViolation}
+              onDeleteViolation={handleDeleteViolation}
+              onAddReward={handleAddReward}
+              onDeleteReward={handleDeleteReward}
+              onSaveMultipleRewards={handleSaveMultipleRewards}
+              onSaveMultipleViolations={handleSaveMultipleViolations}
+              onShowToast={showToast}
+              currentUserGroup={userGroup}
+              settings={settings}
+              currentUser={session.user || undefined}
+            />
+          )}
 
-              <div className="flex flex-col gap-3">
-                {quizQuestions[currentQuizIndex].options.map((opt, idx) => {
-                  const isSelected = selectedOption === opt;
-                  const isCorrect = opt === quizQuestions[currentQuizIndex].answer;
-                  
-                  let btnClass = "no-select w-full text-left p-5 rounded-2xl border-2 transition-all font-medium text-lg flex items-center justify-between ";
-                  
-                  if (!hasAnswered) {
-                    btnClass += isSelected 
-                      ? "border-cyan-600 bg-cyan-50 text-cyan-900" 
-                      : "border-stone-200 bg-white text-stone-700 hover:border-stone-300 active:bg-stone-50";
-                  } else {
-                    if (isCorrect) {
-                      btnClass += "border-emerald-500 bg-emerald-50 text-emerald-900";
-                    } else if (isSelected && !isCorrect) {
-                      btnClass += "border-rose-500 bg-rose-50 text-rose-900";
-                    } else {
-                      btnClass += "border-stone-200 bg-white text-stone-400 opacity-60";
-                    }
+          {activeTab === 'emulation' && (
+            <EmulationView
+              students={students}
+              violations={violations}
+              rewards={rewards}
+              settings={settings}
+              onOpenStudentDetail={(st) => setSelectedStudentForDrawer(st)}
+              onShowToast={showToast}
+            />
+          )}
+
+          {activeTab === 'academics' && (
+            <AcademicsView
+              students={students}
+              grades={grades}
+              settings={settings}
+              onSaveGrade={handleSaveGrade}
+              onShowToast={showToast}
+            />
+          )}
+
+          {activeTab === 'conduct' && (
+            <ConductView
+              students={students}
+              attendance={attendance}
+              violations={violations}
+              rewards={rewards}
+              conducts={conducts}
+              settings={settings}
+              onSaveConduct={handleSaveConduct}
+              onShowToast={showToast}
+            />
+          )}
+
+          {activeTab === 'parents' && (
+            <ParentContactView
+              students={students}
+              contactLogs={contactLogs}
+              settings={settings}
+              onAddLog={handleAddContactLog}
+              onDeleteLog={handleDeleteContactLog}
+              onShowToast={showToast}
+            />
+          )}
+
+          {activeTab === 'calendar' && (
+            <CalendarView
+              events={events}
+              onAddEvent={handleAddCalendarEvent}
+              onDeleteEvent={handleDeleteCalendarEvent}
+              onShowToast={showToast}
+            />
+          )}
+
+          {activeTab === 'reports' && (
+            <ReportsView
+              students={students}
+              attendance={attendance}
+              violations={violations}
+              rewards={rewards}
+              transactions={transactions}
+              contactLogs={contactLogs}
+              diaryEntries={diary}
+              grades={grades}
+              conducts={conducts}
+              settings={settings}
+              onShowToast={showToast}
+            />
+          )}
+
+          {activeTab === 'documents' && (
+            <DocumentsView
+              documents={documents}
+              onAddDocument={handleAddDocument}
+              onShowToast={showToast}
+            />
+          )}
+
+          {activeTab === 'diary' && (
+            <DiaryView
+              entries={diary}
+              onAddEntry={handleAddDiaryEntry}
+              onDeleteEntry={handleDeleteDiaryEntry}
+              onShowToast={showToast}
+            />
+          )}
+
+          {activeTab === 'ai' && (
+            <AIAssistantView
+              students={students}
+              settings={settings}
+              onShowToast={showToast}
+            />
+          )}
+
+          {activeTab === 'analytics' && (
+            <AnalyticsView
+              students={students}
+              attendance={attendance}
+              violations={violations}
+              rewards={rewards}
+              settings={settings}
+            />
+          )}
+
+          {activeTab === 'settings' && (
+            <SettingsView
+              settings={settings}
+              students={students}
+              onUpdateSettings={handleUpdateSettings}
+              onResetData={handleResetData}
+              onShowToast={showToast}
+              onOpenRolePermissions={() => setIsRolePermissionsOpen(true)}
+              onOpenClassInitModal={() => setIsClassInitModalOpen(true)}
+            />
+          )}
+
+          {activeTab === 'audit_logs' && (
+            <AuditLogsView currentRole={session.user.role} />
+          )}
+
+          {activeTab === 'approvals' && (
+            <ApprovalsView
+              currentUser={session.user}
+              onShowToast={showToast}
+              approvals={approvals}
+              students={students}
+              settings={settings}
+              onNavigateToSettings={() => setActiveTab('settings')}
+              onApproveItem={(item) => {
+                if (session.user.role !== 'GVCN' && session.user.role !== 'ADMIN') return;
+                const updated = authService.approveApprovalItem(item.id, session.user.displayName);
+                if (updated) {
+                  if ((item.type === 'attendance_multiple' || item.type === 'attendance') && item.attendanceRecords) {
+                    handleSaveMultipleAttendance(item.attendanceRecords);
+                  } else if (item.type === 'violation' && item.violationRecord) {
+                    handleAddViolation(item.violationRecord);
+                  } else if (item.type === 'reward' && item.rewardRecord) {
+                    handleAddReward(item.rewardRecord);
+                  } else if (item.type === 'reward_multiple' && item.rewardRecords) {
+                    handleSaveMultipleRewards(item.rewardRecords);
+                  } else if (item.type === 'violation_multiple' && item.violationRecords) {
+                    handleSaveMultipleViolations(item.violationRecords);
                   }
+                  showToast('Đã duyệt phiếu trình.', 'success');
+                }
+              }}
+              onRejectItem={(id, reason) => {
+                if (session.user.role !== 'GVCN' && session.user.role !== 'ADMIN') return;
+                const updated = authService.rejectApprovalItem(id, session.user.displayName, reason);
+                if (updated) {
+                  showToast('Đã từ chối phiếu trình.', 'info');
+                }
+              }}
+              onApproveAll={() => {
+                if (session.user.role !== 'GVCN' && session.user.role !== 'ADMIN') return;
+                const pending = approvals.filter(a => a.status === 'pending');
+                let count = 0;
+                pending.forEach(item => {
+                  const updated = authService.approveApprovalItem(item.id, session.user.displayName);
+                  if (updated) {
+                    if ((item.type === 'attendance_multiple' || item.type === 'attendance') && item.attendanceRecords) {
+                      const currentList = storageService.getAttendance();
+                      const updatedAttendance = [...currentList];
+                      item.attendanceRecords.forEach((rec) => {
+                        const idx = updatedAttendance.findIndex(
+                          (a) =>
+                            a.studentId === rec.studentId &&
+                            a.date === rec.date &&
+                            a.session === rec.session &&
+                            a.period === rec.period
+                        );
+                        if (idx >= 0) {
+                          updatedAttendance[idx] = rec;
+                        } else {
+                          updatedAttendance.push(rec);
+                        }
+                      });
+                      storageService.saveAttendance(updatedAttendance);
+                    } else if (item.type === 'violation' && item.violationRecord) {
+                      storageService.addViolation(item.violationRecord);
+                    } else if (item.type === 'reward' && item.rewardRecord) {
+                      storageService.addReward(item.rewardRecord);
+                    } else if (item.type === 'reward_multiple' && item.rewardRecords) {
+                      const currentList = storageService.getRewards();
+                      const merged = [...item.rewardRecords];
+                      const newIds = new Set(item.rewardRecords.map(r => r.id));
+                      currentList.forEach(rec => {
+                        if (!newIds.has(rec.id)) {
+                          merged.push(rec);
+                        }
+                      });
+                      storageService.saveRewards(merged);
+                    } else if (item.type === 'violation_multiple' && item.violationRecords) {
+                      const currentList = storageService.getViolations();
+                      const merged = [...item.violationRecords];
+                      const newIds = new Set(item.violationRecords.map(v => v.id));
+                      currentList.forEach(rec => {
+                        if (!newIds.has(rec.id)) {
+                          merged.push(rec);
+                        }
+                      });
+                      storageService.saveViolations(merged);
+                    }
+                    count++;
+                  }
+                });
+                if (count > 0) {
+                  setAttendance(storageService.getAttendance());
+                  setViolations(storageService.getViolations());
+                  setRewards(storageService.getRewards());
+                  showToast(`Đã duyệt tất cả (${count} phiếu trình).`, 'success');
+                }
+              }}
+            />
+          )}
+        </main>
+      </div>
 
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => handleOptionSelect(opt)}
-                      className={btnClass}
-                      disabled={hasAnswered}
-                    >
-                      <span>{opt}</span>
-                      {hasAnswered && isCorrect && <CheckCircle2 className="w-6 h-6 text-emerald-500 flex-shrink-0 ml-3" />}
-                      {hasAnswered && isSelected && !isCorrect && <XCircle className="w-6 h-6 text-rose-500 flex-shrink-0 ml-3" />}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+      {/* Global Student Detail Drawer */}
+      <StudentDetailDrawer
+        student={selectedStudentForDrawer}
+        isOpen={Boolean(selectedStudentForDrawer)}
+        onClose={() => setSelectedStudentForDrawer(null)}
+        attendance={attendance}
+        violations={violations}
+        rewards={rewards}
+        grades={grades}
+        onOpenEditStudent={(st) => {
+          setSelectedStudentForDrawer(null);
+          setStudentToEdit(st);
+          setStudentFormOpen(true);
+        }}
+      />
 
-            {/* Bottom Action Area */}
-            <div className="p-6 bg-white border-t border-stone-200 pb-safe">
-              {!hasAnswered ? (
-                <button
-                  onClick={handleSubmitAnswer}
-                  disabled={!selectedOption}
-                  className={`no-select w-full font-bold text-lg py-5 rounded-[2rem] transition-all flex items-center justify-center ${
-                    selectedOption 
-                      ? "bg-cyan-600 text-white shadow-xl shadow-cyan-600/20 active:scale-95" 
-                      : "bg-stone-100 text-stone-400 cursor-not-allowed"
-                  }`}
-                >
-                  Kiểm tra
-                </button>
-              ) : (
-                <button
-                  onClick={handleNextQuestion}
-                  className="no-select w-full bg-stone-800 text-white font-bold text-lg py-5 rounded-[2rem] shadow-xl shadow-stone-900/20 active:scale-95 transition-transform flex items-center justify-center gap-2"
-                >
-                  {currentQuizIndex < quizQuestions.length - 1 ? "Tiếp tục" : "Hoàn thành"}
-                </button>
-              )}
-            </div>
-          </motion.div>
-        )}
+      {/* Global Student Add/Edit Modal Form */}
+      <StudentFormModal
+        isOpen={studentFormOpen}
+        onClose={() => {
+          setStudentFormOpen(false);
+          setStudentToEdit(null);
+        }}
+        onSave={handleSaveStudent}
+        onOpenImportExcel={() => setIsImportModalOpen(true)}
+        studentToEdit={studentToEdit}
+        currentCount={students.length}
+        className={settings.className}
+      />
 
-        {screen === 'settings' && (
-          <motion.div 
-            key="settings"
-            initial={{ opacity: 0, x: 50 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -50 }}
-            className="flex-1 flex flex-col p-6 space-y-6"
-          >
-            <div className="flex items-center mb-4">
-              <button 
-                onClick={returnHome}
-                className="no-select w-10 h-10 flex items-center justify-center rounded-full bg-white shadow-sm border border-stone-200 text-stone-600 active:bg-stone-100 transition-colors"
-              >
-                <ChevronLeft className="w-6 h-6" />
-              </button>
-              <h2 className="text-xl font-bold text-stone-800 ml-4">Cài Đặt</h2>
-            </div>
+      {/* Global Excel Student Import Modal */}
+      <ImportStudentsModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImportSuccess={handleImportStudents}
+        existingStudents={students}
+        settings={settings}
+      />
 
-            <div className="bg-white rounded-3xl p-5 shadow-sm border border-stone-200 flex flex-col gap-6">
-              {/* Sound Toggle */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-xl ${isSoundEnabled ? 'bg-cyan-50 text-cyan-600' : 'bg-stone-100 text-stone-400'}`}>
-                    {isSoundEnabled ? <Volume2 className="w-6 h-6" /> : <VolumeX className="w-6 h-6" />}
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-stone-800">Âm thanh</h3>
-                    <p className="text-sm text-stone-500">Bật/tắt hiệu ứng âm thanh</p>
-                  </div>
-                </div>
-                <button
-                  onClick={toggleSound}
-                  className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${isSoundEnabled ? 'bg-cyan-500' : 'bg-stone-200'}`}
-                >
-                  <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${isSoundEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
-                </button>
-              </div>
-              
-              <div className="h-px w-full bg-stone-100"></div>
+      {/* Global Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
+      />
 
-              {/* Memorized Cards */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
-                    <Layers className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-stone-800">Thẻ đã nhớ</h3>
-                    <p className="text-sm text-stone-500">{memorizedCards.length} / {questions.length} thẻ</p>
-                  </div>
-                </div>
-                <button
-                  onClick={resetMemorized}
-                  disabled={memorizedCards.length === 0}
-                  className="px-4 py-2 bg-stone-100 text-stone-600 font-bold rounded-xl text-sm active:bg-stone-200 disabled:opacity-50 transition-colors"
-                >
-                  Khôi phục
-                </button>
-              </div>
+      {/* Change Password Modal */}
+      <ChangePasswordModal
+        isOpen={showChangePassword}
+        onClose={() => setShowChangePassword(false)}
+        user={session.user}
+        onSuccessToast={showToast}
+      />
 
-              <div className="h-px w-full bg-stone-100"></div>
+      {/* Global Toast Notification */}
+      <Snackbar
+        message={toast.message}
+        type={toast.type}
+        isVisible={toast.isVisible}
+        onClose={() => setToast((prev) => ({ ...prev, isVisible: false }))}
+      />
 
-              {/* Quiz Length */}
-              <div className="flex flex-col gap-3">
-                <div>
-                  <h3 className="font-bold text-stone-800">Số câu hỏi trắc nghiệm</h3>
-                  <p className="text-sm text-stone-500">Mỗi lượt làm bài kiểm tra</p>
-                </div>
-                <div className="flex bg-stone-100 rounded-2xl p-1.5 gap-1">
-                  {[15, 30, questions.length].map(num => (
-                    <button
-                      key={num}
-                      onClick={() => updateQuizLength(num)}
-                      className={`flex-1 no-select py-2.5 rounded-xl text-sm font-bold transition-all ${quizLength === num ? 'bg-white text-cyan-600 shadow-sm' : 'text-stone-500 hover:bg-stone-200/50'}`}
-                    >
-                      {num === questions.length ? 'Tất cả' : `${num} câu`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
+      {/* Mobile Bottom Navigation Bar */}
+      <MobileBottomNav
+        currentTab={activeTab}
+        onSelectTab={(tab) => {
+          setActiveTab(tab);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onOpenMobileMenu={() => setIsMobileSidebarOpen(true)}
+        badgeCounts={{
+          absentToday: absentTodayCount,
+          violationsCount: violations.length,
+          urgentAttention: urgentAttentionCount,
+        }}
+        currentUser={session.user}
+      />
 
-        {screen === 'result' && (
-          <motion.div 
-            key="result"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="flex-1 flex flex-col p-6 items-center justify-center text-center space-y-8"
-          >
-            <div className="w-32 h-32 bg-amber-100 rounded-full flex items-center justify-center mb-4">
-              <Award className="w-16 h-16 text-amber-500" />
-            </div>
-            
-            <div className="space-y-2">
-              <h2 className="text-3xl font-black text-stone-800">Hoàn Thành!</h2>
-              <p className="text-stone-500">Bạn đã trả lời đúng {score} trên {quizQuestions.length} câu hỏi.</p>
-            </div>
+      {/* RBAC Role Permissions & Configuration Modal */}
+      <RolePermissionsModal
+        isOpen={isRolePermissionsOpen}
+        onClose={() => setIsRolePermissionsOpen(false)}
+        showToast={showToast}
+      />
 
-            <div className="bg-white rounded-3xl p-8 w-full shadow-sm border border-stone-200 mt-8 mb-8">
-              <p className="text-6xl font-black text-cyan-600 mb-2">
-                {Math.round((score / quizQuestions.length) * 100)}%
-              </p>
-              <p className="text-sm font-bold text-stone-400 uppercase tracking-wider">ĐIỂM SỐ</p>
-            </div>
-
-            <div className="w-full space-y-4 mt-auto pb-4">
-              <button 
-                onClick={startQuiz}
-                className="no-select w-full bg-cyan-600 text-white font-bold text-lg py-5 rounded-[2rem] shadow-xl shadow-cyan-600/20 active:scale-95 transition-transform flex items-center justify-center gap-2"
-              >
-                <RotateCcw className="w-5 h-5" />
-                Làm Lại ({quizLength === questions.length ? 'Tất cả' : quizLength} câu)
-              </button>
-              <button 
-                onClick={returnHome}
-                className="no-select w-full bg-white text-stone-700 font-bold text-lg py-5 rounded-[2rem] border-2 border-stone-200 active:bg-stone-50 transition-colors flex items-center justify-center gap-2"
-              >
-                <Home className="w-5 h-5" />
-                Về Trang Chủ
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Class Account Initialization & Cadre Setup Wizard Modal */}
+      <ClassAccountInitModal
+        isOpen={isClassInitModalOpen}
+        onClose={() => setIsClassInitModalOpen(false)}
+        currentClass={session?.user.assignedClass || settings.className}
+        academicYear={settings.academicYear}
+        existingStudents={students}
+        currentUser={session.user}
+        onShowToast={showToast}
+        onSuccess={(createdAccounts, updatedStudents, finalizedClass) => {
+          const targetClass = (finalizedClass || session?.user.assignedClass || settings.className).trim().toUpperCase();
+          if (session && session.user && session.user.role === 'GVCN' && session.user.assignedClass !== targetClass) {
+            const updatedUser = { ...session.user, assignedClass: targetClass };
+            authService.setSession({ ...session, user: updatedUser });
+            setSession({ ...session, user: updatedUser });
+          }
+          storageService.setActiveClass(targetClass);
+          loadClassData(targetClass);
+        }}
+      />
     </div>
   );
 }
